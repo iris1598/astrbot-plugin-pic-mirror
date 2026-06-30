@@ -340,12 +340,17 @@ class ImageHandler:
     def _get_local_file(self, file_path: str) -> Optional[Path]:
         """获取本地文件 - 安全版本（防路径遍历）"""
         try:
-            # 只允许相对路径，且必须在data_dir内
             clean_path = Path(file_path)
 
-            # 检查是否为相对路径（不允许绝对路径）
+            # v4.26.2 兼容: AstrBot 预处理阶段会将图片下载为本地绝对路径
+            # （如 /root/AstrBot/data/temp/media_image_xxx.jpg），这些文件是
+            # AstrBot 自身生成的有效资源，即使为绝对路径也应直接接受。
+            if clean_path.exists():
+                return clean_path.resolve()
+
+            # 只允许相对路径，且必须在 data_dir 内
             if clean_path.is_absolute():
-                logger.warning(f"拒绝绝对路径: {file_path}")
+                logger.warning(f"拒绝不存在的绝对路径: {file_path}")
                 return None
 
             # 构建安全路径
