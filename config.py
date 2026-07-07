@@ -80,6 +80,9 @@ class PluginConfig:
     enable_auto_cleanup: bool = True  # 是否启用自动清理
     enable_at_avatar: bool = True  # 是否启用@用户头像功能
 
+    # qqofficial 适配相关
+    qqofficial_appid: str = ""  # QQ官方机器人 AppID（兜底配置，通常可自动从平台实例读取）
+
     # 清理设置
     keep_files_hours: int = 1  # 文件保留时间 (小时)
 
@@ -166,6 +169,7 @@ class PluginConfig:
                 enable_auto_cleanup=safe_get("enable_auto_cleanup", config.enable_auto_cleanup, bool),
                 keep_files_hours=safe_get("keep_files_hours", config.keep_files_hours, int),
                 enable_at_avatar=safe_get("enable_at_avatar", config.enable_at_avatar, bool),
+                qqofficial_appid=safe_get("qqofficial_appid", config.qqofficial_appid, str),
                 rate_limit_per_minute=safe_get("rate_limit_per_minute", config.rate_limit_per_minute, int),
                 max_concurrent_tasks=safe_get("max_concurrent_tasks", config.max_concurrent_tasks, int),
                 max_gif_frames=safe_get("max_gif_frames", config.max_gif_frames, int),

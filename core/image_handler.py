@@ -39,9 +39,11 @@ class ImageHandler:
 
     RATE_LIMIT_WINDOW_SECONDS = 60  # 频率限制时间窗口（秒）
 
-    def __init__(self, config_service, plugin_name: str = None):
+    def __init__(self, config_service, plugin_name: str = None, context=None):
         self.config_service = config_service
         self.config = config_service.config  # ✅ 直接使用
+        # 保存 context 引用，用于获取平台实例（如 qqofficial_full 的 appid）
+        self.context = context
 
         # 初始化组件
         self.network_utils = NetworkUtils(timeout=self.config.processing_timeout)
@@ -157,11 +159,28 @@ class ImageHandler:
 
                 # 1. 尝试获取@的用户头像
                 if self.config.enable_at_avatar:
-                    at_qq = self.message_utils.extract_at_qq(event)
-                    if at_qq:
-                        async for result in self._process_avatar(event, at_qq, mode):
-                            yield result
-                        return
+                    # qqofficial 系列适配器：openid 模式
+                    # 与 onebot11 策略一致：仅在群聊 @ 他人时取头像，
+                    # 未 @ 或私聊场景不取头像，继续走图片源提取逻辑
+                    if self.message_utils.is_qqofficial_platform(event):
+                        at_openid = (
+                            self.message_utils.extract_at_openid_qqofficial(event)
+                        )
+                        if at_openid:
+                            async for result in self._process_qqofficial_avatar(
+                                event, at_openid, mode
+                            ):
+                                yield result
+                            return
+                        # 未 @ 他人：继续走图片源提取逻辑（与 onebot11 一致）
+
+                    # 普通 QQ 平台：基于 QQ 号取头像
+                    else:
+                        at_qq = self.message_utils.extract_at_qq(event)
+                        if at_qq:
+                            async for result in self._process_avatar(event, at_qq, mode):
+                                yield result
+                            return
 
                 # 2. 提取图像源
                 image_sources = self.message_utils.extract_image_sources(event)
@@ -226,6 +245,117 @@ class ImageHandler:
             event, input_path, mode, f"qq_{qq_number}"
         ):
             yield result
+
+    async def _process_qqofficial_avatar(
+        self, event, at_openid: str, mode: str
+    ):
+        """
+        处理 qqofficial / qqofficial_full 平台被 @ 用户的头像
+
+        与 _process_avatar(at_qq) 对应，仅处理被 @ 用户的头像，不做任何回退。
+        调用方应已通过 extract_at_openid_qqofficial 确认 at_openid 有效
+        （即群聊场景下确实 @ 了他人）。
+
+        头像 URL: https://q.qlogo.cn/qqapp/{AppID}/{member_openid}/640
+
+        Args:
+            event: AstrMessageEvent
+            at_openid: 被 @ 用户的 member_openid
+            mode: 对称模式
+        """
+        # 获取 AppID（优先 platform 实例，其次配置兜底）
+        appid = self._get_qqofficial_appid(event)
+        if not appid:
+            yield self._get_error_message(
+                event,
+                "获取头像失败",
+                "未能获取 qqofficial AppID，请在插件配置中填写 qqofficial_appid 或检查平台适配器",
+            )
+            return
+
+        logger.info(
+            f"处理qqofficial头像: openid={at_openid}, appid={appid}"
+        )
+
+        # 拉取头像
+        avatar_data = await self.avatar_service.get_qqofficial_avatar(
+            appid, at_openid
+        )
+        if not avatar_data:
+            yield self._get_error_message(event, "获取头像失败")
+            return
+
+        # 保存并处理
+        input_path = await self._save_temp_file(
+            avatar_data, f"avatar_qqofficial_{at_openid}", ".jpg"
+        )
+        if not input_path:
+            yield self._get_error_message(event, "保存头像失败")
+            return
+
+        async for result in self._process_single_image(
+            event, input_path, mode, f"qqofficial_{at_openid}"
+        ):
+            yield result
+
+    def _get_qqofficial_appid(self, event) -> Optional[str]:
+        """
+        获取 qqofficial 平台的 AppID
+
+        优先通过 context.get_platform_inst(platform_id) 拿到平台实例的 appid 属性；
+        若失败则回退到插件配置中的 qqofficial_appid 字段。
+
+        Args:
+            event: AstrMessageEvent
+
+        Returns:
+            AppID 字符串，未找到返回 None
+        """
+        # 优先从平台实例获取
+        try:
+            if self.context is not None:
+                platform_id = None
+                try:
+                    platform_id = event.get_platform_id()
+                except Exception:
+                    platform_id = None
+
+                platform_inst = None
+                if platform_id:
+                    try:
+                        platform_inst = self.context.get_platform_inst(platform_id)
+                    except Exception:
+                        platform_inst = None
+
+                # 兼容旧版本：get_platform_inst 不可用时尝试 get_platform
+                if platform_inst is None:
+                    try:
+                        platform_inst = self.context.get_platform(
+                            "qq_official_full"
+                        )
+                    except Exception:
+                        platform_inst = None
+
+                if platform_inst is not None:
+                    appid = getattr(platform_inst, "appid", None)
+                    if appid:
+                        appid = str(appid)
+                        logger.debug(f"从平台实例获取到 qqofficial appid: {appid}")
+                        return appid
+        except Exception as e:
+            logger.warning(f"从平台实例获取 qqofficial appid 失败: {e}")
+
+        # 回退到插件配置
+        try:
+            appid = getattr(self.config, "qqofficial_appid", "") or ""
+            if appid:
+                appid = str(appid)
+                logger.debug(f"使用配置兜底的 qqofficial appid: {appid}")
+                return appid
+        except Exception:
+            pass
+
+        return None
 
     async def _process_single_image(
         self, event, input_path: Path, mode: str, source_info: str

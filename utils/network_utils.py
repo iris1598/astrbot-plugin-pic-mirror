@@ -120,13 +120,17 @@ class NetworkUtils:
     RETRY_BASE_DELAY = 0.5
     RETRY_MAX_DELAY = 4.0
 
-    # QQ头像API列表
+    # QQ头像API列表（基于QQ号，适用于 aiocqhttp / qq 频道等场景）
     QQ_AVATAR_APIS = [
         "https://q1.qlogo.cn/g?b=qq&nk={qq_number}&s={size}",
         "https://q2.qlogo.cn/headimg_dl?dst_uin={qq_number}&spec={size}",
         "https://q4.qlogo.cn/headimg_dl?dst_uin={qq_number}&spec={size}",
         "https://q.qlogo.cn/g?b=qq&nk={qq_number}&s={size}",
     ]
+
+    # QQ官方机器人头像API模板（基于 AppID + openid，适用于 qqofficial / qqofficial_full 适配器）
+    # 群聊使用 member_openid，C2C 私聊使用 user_openid
+    QQOFFICIAL_AVATAR_URL = "https://q.qlogo.cn/qqapp/{appid}/{openid}/{size}"
 
     def __init__(self, timeout: int = 30, config=None):
         self.timeout = timeout
@@ -446,6 +450,53 @@ class NetworkUtils:
                 continue
 
         logger.error(f"所有头像API都失败: {qq_number}")
+        return None
+
+    async def get_qqofficial_avatar(
+        self, appid: str, openid: str, size: int = 640
+    ) -> Optional[bytes]:
+        """
+        获取QQ官方机器人平台用户头像
+
+        qqofficial / qqofficial_full 适配器无法直接通过 QQ 号取头像，
+        需要使用 AppID + 用户 openid 拼接 q.qlogo.cn/qqapp 接口。
+
+        - 群聊 GroupMessage: openid = member_openid
+        - C2C 私聊 C2CMessage: openid = user_openid
+
+        Args:
+            appid: QQ 机器人 AppID
+            openid: 用户的 member_openid 或 user_openid
+            size: 头像尺寸 (默认640)
+
+        Returns:
+            头像图片字节数据，失败返回None
+        """
+        if not appid or not openid:
+            logger.warning(
+                f"qqofficial头像参数无效: appid={appid!r}, openid={openid!r}"
+            )
+            return None
+
+        # openid 可能是 member_openid 或 user_openid，统一处理
+        url = self.QQOFFICIAL_AVATAR_URL.format(
+            appid=appid, openid=openid, size=size
+        )
+
+        try:
+            avatar_data = await self._download_with_retry(url)
+            if avatar_data:
+                logger.info(
+                    f"成功获取qqofficial头像: openid={openid}, size={size}"
+                )
+                return avatar_data
+            else:
+                logger.warning(
+                    f"qqofficial头像API返回空: {url}"
+                )
+        except Exception as e:
+            logger.warning(f"qqofficial头像API异常 {url}: {e}")
+
         return None
 
     async def _download_with_retry(self, url: str, retries: int = 2) -> Optional[bytes]:

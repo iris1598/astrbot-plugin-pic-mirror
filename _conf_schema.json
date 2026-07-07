@@ -93,6 +93,12 @@
     "default": true,
     "hint": "是否允许通过@用户获取其头像进行处理"
   },
+  "qqofficial_appid": {
+    "description": "QQ官方机器人 AppID (可选)",
+    "type": "string",
+    "default": "",
+    "hint": "仅在 qqofficial / qqofficial_full 适配器下用于头像获取。通常可自动从平台实例读取，无需填写；若自动获取失败可在此手动填入"
+  },
   "rate_limit_per_minute": {
     "description": "请求频率限制 (次/分钟)",
     "type": "int",

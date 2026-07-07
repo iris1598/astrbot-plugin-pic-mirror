@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import re
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.core.star.filter.event_message_type import EventMessageType
@@ -13,6 +14,7 @@ from .constants import PLUGIN_NAME
 from astrbot.api import logger
 from .services.config_service import ConfigService
 from .core.image_handler import ImageHandler
+from .utils.message_utils import MessageUtils
 
 
 # 根据 AstrBot v3.5.20+ 最佳实践: @register 装饰器已废弃
@@ -25,7 +27,11 @@ class PicMirrorPlugin(Star):
         super().__init__(context)
 
         self.config_service = ConfigService(self)
-        self.image_handler = ImageHandler(self.config_service)
+        # 传入 context，便于 image_handler 通过 get_platform_inst 获取
+        # qqofficial_full 平台实例的 appid 等信息
+        self.image_handler = ImageHandler(
+            self.config_service, context=context
+        )
         self._initialized = False
         self._init_task = None
         self._init_lock = asyncio.Lock()  # 防止初始化竞态条件
@@ -64,6 +70,13 @@ class PicMirrorPlugin(Star):
         格式: "指令名 @用户" (如: "左对称 @张三")
         """
         message_str = event.message_str.strip()
+
+        # qqofficial 系列适配器中，普通用户 @ 不会生成 At 组件，
+        # message_str 里仍保留 <@!{openid}> / <@{openid}> 原始标记
+        # （仅 bot 自身的 @ 在适配器层被剥离），需要归一化为 "@" 才能复用
+        # 下方基于 "@" 的指令解析逻辑，否则指令无法匹配会被 LLM 接管。
+        if MessageUtils.is_qqofficial_platform(event):
+            message_str = re.sub(r"<@!?[A-Za-z0-9_\-]+>", "@", message_str).strip()
 
         plain_commands = {
             "/左对称": "left_to_right",

@@ -43,7 +43,8 @@ class ConfigService:
             f"频率限制={config.rate_limit_per_minute}次/分钟, "
             f"并发上限={config.max_concurrent_tasks}, "
             f"自动清理={'启用' if config.enable_auto_cleanup else '禁用'}, "
-            f"@头像功能={'启用' if config.enable_at_avatar else '禁用'}"
+            f"@头像功能={'启用' if config.enable_at_avatar else '禁用'}, "
+            f"qqofficial适配={'启用' if config.qqofficial_appid else '自动'}"
         )
 
     def get_help_text(self) -> str:
