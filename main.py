@@ -5,7 +5,7 @@
 import asyncio
 import re
 
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.api.star import Context, Star
 
@@ -130,7 +130,9 @@ class PicMirrorPlugin(Star):
 
         if self.image_handler is None:
             logger.error("image_handler 未初始化")
-            yield event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            yield self._tag_result(
+                event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            )
             return
 
         async for result in self.image_handler.process_mirror(event, mode):
@@ -145,16 +147,65 @@ class PicMirrorPlugin(Star):
 
         if self.config_service is None:
             logger.error("config_service 未初始化")
-            yield event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            yield self._tag_result(
+                event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            )
             return
 
         help_text = self.config_service.get_help_text()
-        yield event.plain_result(help_text)
+        yield self._tag_result(event.plain_result(help_text))
 
     # @filter.on_astrbot_loaded
     # async def on_loaded(self):
     #     """Bot加载完成时自动调用初始化"""
     #     await self.initialize()
+
+    @staticmethod
+    def _tag_result(result):
+        """给本插件产出的 MessageEventResult 打标记
+
+        on_decorating_result 钩子据此识别本插件的结果。
+        """
+        try:
+            result._pic_mirror_result = True
+        except Exception:
+            pass
+        return result
+
+    @filter.on_decorating_result()
+    async def on_decorating_result(self, event: AstrMessageEvent):
+        """qqofficial 平台：去除「回复时 @ 发送人」产生的 <@openid> 乱码
+
+        AstrBot 的「回复时 @ 发送人」(reply_with_mention) 会在 result.chain
+        开头插入 At(qq=sender_openid) 组件。qqofficial_full 适配器将 At
+        序列化为 <@{openid}> 文本，而 QQ 官方客户端不识别该格式，直接显示
+        原始文本，造成乱码。
+
+        本钩子在本插件产出的结果上（通过 _pic_mirror_result 标记识别），
+        改用 event.send() 直接发送原始消息链，并 stop_event() 终止后续
+        result_decorate 逻辑（含 At 追加），从而避免乱码。
+        """
+        # 仅处理 qqofficial 系列平台
+        if not MessageUtils.is_qqofficial_platform(event):
+            return
+
+        result = event.get_result()
+        if result is None or not result.chain:
+            return
+
+        # 仅处理本插件产出的结果，不影响其他插件/LLM 回复
+        if not getattr(result, "_pic_mirror_result", False):
+            return
+
+        # 用 event.send() 直接发送原始消息链，绕过 At 追加
+        try:
+            await event.send(MessageChain(chain=list(result.chain)))
+        except Exception as e:
+            logger.warning(f"pic-mirror 直接发送失败，回退正常流程: {e}")
+            return
+
+        # 终止事件传播，跳过后续 result_decorate（含 At 追加）和 send stage
+        event.stop_event()
 
     async def terminate(self):
         """插件卸载时调用"""
