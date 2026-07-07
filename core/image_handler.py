@@ -193,9 +193,7 @@ class ImageHandler:
                 # 3. 发送处理中提示（非静默模式）
                 if not self.config.silent_mode:
                     processing_msg = MirrorProcessor.get_mode_description(mode)
-                    yield self._tag_result(
-                        event.plain_result(f"🔄 正在处理图像: {processing_msg}...")
-                    )
+                    yield event.plain_result(f"🔄 正在处理图像: {processing_msg}...")
 
                 # 4. 处理图像源
                 processed = False
@@ -548,16 +546,15 @@ class ImageHandler:
             mode: 对称模式
         """
         if self.config.silent_mode:
-            result = event.chain_result([Comp.Image(file=str(output_path))])
+            return event.chain_result([Comp.Image(file=str(output_path))])
         else:
             description = MirrorProcessor.get_mode_description(mode)
-            result = event.chain_result(
+            return event.chain_result(
                 [
                     Comp.Plain(text=f"✅ {description}\n"),
                     Comp.Image(file=str(output_path)),
                 ]
             )
-        return self._tag_result(result)
 
     def _get_error_message(self, event, message: str, detail: str = None):
         """
@@ -569,27 +566,12 @@ class ImageHandler:
             detail: 详细错误信息（非静默模式时显示）
         """
         if self.config.silent_mode:
-            result = event.plain_result(f"❌ {message}")
+            return event.plain_result(f"❌ {message}")
         else:
             full_msg = f"❌ {message}"
             if detail:
                 full_msg += f"\n详情: {detail}"
-            result = event.plain_result(full_msg)
-        return self._tag_result(result)
-
-    @staticmethod
-    def _tag_result(result):
-        """给本插件产出的 MessageEventResult 打标记
-
-        on_decorating_result 钩子据此识别本插件的结果，在 qqofficial
-        平台用 event.send() 直接发送，绕过 result_decorate 的 At 追加，
-        避免回复结尾出现 <@{openid}> 乱码。
-        """
-        try:
-            result._pic_mirror_result = True
-        except Exception:
-            pass
-        return result
+            return event.plain_result(full_msg)
 
     async def cleanup(self):
         await self.cleanup_manager.cleanup_all()
