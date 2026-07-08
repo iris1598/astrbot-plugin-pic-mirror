@@ -63,6 +63,27 @@ class PicMirrorPlugin(Star):
             logger.error(f"插件初始化失败: {e}", exc_info=True)
             self._initialized = False  # 标记为未初始化，允许重试
 
+    async def _send_or_return(self, event: AstrMessageEvent, result):
+        """
+        发送或返回结果消息。
+
+        在 qqofficial 系列平台上，AstrBot 的「回复时 @ 发送人」功能会自动
+        在结果链头插入 At 组件，但 qqofficial 适配器会忽略 At 组件，
+        导致 @ 无法正常显示。因此对于 qqofficial 平台，通过 event.send()
+        直接发送消息以绕过框架的 ResultDecorateStage。
+
+        Args:
+            event: 消息事件对象
+            result: MessageEventResult
+
+        Returns:
+            MessageEventResult | None
+        """
+        if MessageUtils.is_qqofficial_platform(event):
+            await event.send(result)
+            return None
+        return result
+
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_all_mirror_commands(self, event: AstrMessageEvent):
         """
@@ -130,11 +151,15 @@ class PicMirrorPlugin(Star):
 
         if self.image_handler is None:
             logger.error("image_handler 未初始化")
-            yield event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            result = event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            wrapped = await self._send_or_return(event, result)
+            if wrapped is not None:
+                yield wrapped
             return
 
         async for result in self.image_handler.process_mirror(event, mode):
-            yield result
+            if result is not None:
+                yield result
 
     @filter.command(
         "对称帮助", alias={"mirror help", "镜像帮助"}
@@ -145,11 +170,17 @@ class PicMirrorPlugin(Star):
 
         if self.config_service is None:
             logger.error("config_service 未初始化")
-            yield event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            result = event.plain_result("❌ 插件尚未初始化完成，请稍后再试")
+            wrapped = await self._send_or_return(event, result)
+            if wrapped is not None:
+                yield wrapped
             return
 
         help_text = self.config_service.get_help_text()
-        yield event.plain_result(help_text)
+        result = event.plain_result(help_text)
+        wrapped = await self._send_or_return(event, result)
+        if wrapped is not None:
+            yield wrapped
 
     # @filter.on_astrbot_loaded
     # async def on_loaded(self):

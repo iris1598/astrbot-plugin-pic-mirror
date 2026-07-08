@@ -151,7 +151,9 @@ class ImageHandler:
 
             if not allowed:
                 logger.warning(f"用户 {user_id} 触发频率限制")
-                yield self._get_error_message(event, error_msg)
+                result = await self._get_error_message(event, error_msg)
+                if result is not None:
+                    yield result
                 return
 
             async with self._processing_semaphore:
@@ -187,13 +189,18 @@ class ImageHandler:
                 logger.info(f"找到的图像源: {len(image_sources)}个")
 
                 if not image_sources:
-                    yield self._get_error_message(event, "未找到图像")
+                    result = await self._get_error_message(event, "未找到图像")
+                    if result is not None:
+                        yield result
                     return
 
                 # 3. 发送处理中提示（非静默模式）
                 if not self.config.silent_mode:
                     processing_msg = MirrorProcessor.get_mode_description(mode)
-                    yield event.plain_result(f"🔄 正在处理图像: {processing_msg}...")
+                    result = event.plain_result(f"🔄 正在处理图像: {processing_msg}...")
+                    wrapped = await self._send_or_return(event, result)
+                    if wrapped is not None:
+                        yield wrapped
 
                 # 4. 处理图像源
                 processed = False
@@ -217,11 +224,15 @@ class ImageHandler:
                         continue
 
                 if not processed:
-                    yield self._get_error_message(event, "处理失败", "未能处理任何图像")
+                    result = await self._get_error_message(event, "处理失败", "未能处理任何图像")
+                    if result is not None:
+                        yield result
 
         except Exception as e:
             logger.error(f"处理指令异常: {str(e)}", exc_info=True)
-            yield self._get_error_message(event, "处理失败", str(e))
+            result = await self._get_error_message(event, "处理失败", str(e))
+            if result is not None:
+                yield result
 
     async def _process_avatar(self, event, qq_number: str, mode: str):
         """处理用户头像"""
@@ -229,7 +240,9 @@ class ImageHandler:
 
         avatar_data = await self.avatar_service.get_avatar(qq_number)
         if not avatar_data:
-            yield self._get_error_message(event, "获取头像失败")
+            result = await self._get_error_message(event, "获取头像失败")
+            if result is not None:
+                yield result
             return
 
         # 保存头像临时文件
@@ -237,7 +250,9 @@ class ImageHandler:
             avatar_data, f"avatar_{qq_number}", ".jpg"
         )
         if not input_path:
-            yield self._get_error_message(event, "保存头像失败")
+            result = await self._get_error_message(event, "保存头像失败")
+            if result is not None:
+                yield result
             return
 
         # 处理头像
@@ -266,11 +281,13 @@ class ImageHandler:
         # 获取 AppID（优先 platform 实例，其次配置兜底）
         appid = self._get_qqofficial_appid(event)
         if not appid:
-            yield self._get_error_message(
+            result = await self._get_error_message(
                 event,
                 "获取头像失败",
                 "未能获取 qqofficial AppID，请在插件配置中填写 qqofficial_appid 或检查平台适配器",
             )
+            if result is not None:
+                yield result
             return
 
         logger.info(
@@ -282,7 +299,9 @@ class ImageHandler:
             appid, at_openid
         )
         if not avatar_data:
-            yield self._get_error_message(event, "获取头像失败")
+            result = await self._get_error_message(event, "获取头像失败")
+            if result is not None:
+                yield result
             return
 
         # 保存并处理
@@ -290,7 +309,9 @@ class ImageHandler:
             avatar_data, f"avatar_qqofficial_{at_openid}", ".jpg"
         )
         if not input_path:
-            yield self._get_error_message(event, "保存头像失败")
+            result = await self._get_error_message(event, "保存头像失败")
+            if result is not None:
+                yield result
             return
 
         async for result in self._process_single_image(
@@ -382,7 +403,9 @@ class ImageHandler:
 
             if success:
                 # 发送结果
-                yield self._get_result_message(event, output_path, mode)
+                result = await self._get_result_message(event, output_path, mode)
+                if result is not None:
+                    yield result
 
                 # 安排清理
                 if self.config.enable_auto_cleanup:
@@ -392,11 +415,15 @@ class ImageHandler:
 
             else:
                 logger.warning(f"图像处理失败: {message}")
-                yield self._get_error_message(event, "处理失败", message)
+                result = await self._get_error_message(event, "处理失败", message)
+                if result is not None:
+                    yield result
 
         except Exception as e:
             logger.error(f"处理单图像失败: {str(e)}", exc_info=True)
-            yield self._get_error_message(event, "处理失败")
+            result = await self._get_error_message(event, "处理失败")
+            if result is not None:
+                yield result
 
     async def _prepare_image_file(self, image_source: str) -> Optional[Path]:
         """准备图像文件 - 优化版"""
@@ -536,7 +563,33 @@ class ImageHandler:
         except Exception as e:
             logger.warning(f"清理输入文件失败 {file_path}: {e}")
 
-    def _get_result_message(self, event, output_path: Path, mode: str):
+    async def _send_or_return(self, event, result):
+        """
+        发送或返回结果消息。
+
+        在 qqofficial 系列平台上，AstrBot 的「回复时 @ 发送人」功能会自动
+        在结果链头插入 At 组件，但 qqofficial 适配器会忽略 At 组件（仅处理
+        Plain / Image / Record / Video / File），导致 @ 无法正常显示。
+        因此，对于 qqofficial 平台，通过 event.send() 直接发送消息以绕过
+        框架的 ResultDecorateStage，避免无效 At 组件的插入。
+
+        对于其他平台，直接返回 MessageEventResult 供框架正常处理。
+
+        Args:
+            event: 消息事件对象
+            result: MessageEventResult（来自 event.chain_result / event.plain_result）
+
+        Returns:
+            MessageEventResult | None: qqofficial 平台返回 None（已直接发送），
+            其他平台返回原 result 供 yield
+        """
+        if self.message_utils.is_qqofficial_platform(event):
+            # MessageEventResult 继承自 MessageChain，可直接 send
+            await event.send(result)
+            return None
+        return result
+
+    async def _get_result_message(self, event, output_path: Path, mode: str):
         """
         获取结果消息
 
@@ -544,19 +597,23 @@ class ImageHandler:
             event: 消息事件对象
             output_path: 输出文件路径
             mode: 对称模式
+
+        Returns:
+            MessageEventResult | None: None 表示已通过 event.send() 直接发送
         """
         if self.config.silent_mode:
-            return event.chain_result([Comp.Image(file=str(output_path))])
+            result = event.chain_result([Comp.Image(file=str(output_path))])
         else:
             description = MirrorProcessor.get_mode_description(mode)
-            return event.chain_result(
+            result = event.chain_result(
                 [
                     Comp.Plain(text=f"✅ {description}\n"),
                     Comp.Image(file=str(output_path)),
                 ]
             )
+        return await self._send_or_return(event, result)
 
-    def _get_error_message(self, event, message: str, detail: str = None):
+    async def _get_error_message(self, event, message: str, detail: str = None):
         """
         获取错误消息
 
@@ -564,14 +621,18 @@ class ImageHandler:
             event: 消息事件对象
             message: 简要错误消息
             detail: 详细错误信息（非静默模式时显示）
+
+        Returns:
+            MessageEventResult | None: None 表示已通过 event.send() 直接发送
         """
         if self.config.silent_mode:
-            return event.plain_result(f"❌ {message}")
+            result = event.plain_result(f"❌ {message}")
         else:
             full_msg = f"❌ {message}"
             if detail:
                 full_msg += f"\n详情: {detail}"
-            return event.plain_result(full_msg)
+            result = event.plain_result(full_msg)
+        return await self._send_or_return(event, result)
 
     async def cleanup(self):
         await self.cleanup_manager.cleanup_all()
