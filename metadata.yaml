@@ -3,4 +3,4 @@ display_name: 更多的图像对称 # 用于展示的名字，可以是方便人
 desc: 一个图像对称处理插件，用于生成诡异弔图，可以为图片添加多种镜像效果 # 插件简短描述
 version: v1.2.5 # 插件版本号。格式：v1.2.0 或者 v1.1
 author: FenChen0211 # 作者
-repo: https://github.com/FenChen0211/astrbot-plugin-pic-mirror # 插件的仓库地址
+repo: https://github.com/iris1598/astrbot-plugin-pic-mirror # 插件的仓库地址
